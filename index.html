@@ -14,6 +14,30 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
+  <script>
+  // Load environment variables from .env file
+  // For local development only
+  async function loadEnv() {
+    try {
+      const response = await fetch('.env');
+      const text = await response.text();
+      const lines = text.split('\n');
+      for (const line of lines) {
+        if (line.trim() && !line.startsWith('#')) {
+          const [key, ...value] = line.split('=');
+          window[key.trim()] = value.join('=').trim();
+        }
+      }
+      console.log('✅ Environment variables loaded');
+    } catch (error) {
+      console.warn('⚠️ Could not load .env file, using fallback values');
+    }
+  }
+  
+  // Load .env file before running the app
+  await loadEnv();
+</script>
+
   <style>
     * {
       margin: 0;
@@ -1889,8 +1913,7 @@
 ============================================================ */
 
 // Your Brevo API Key from: SMTP & API → API Keys
-const BREVO_API_KEY = "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"; // Replace this!
-
+const BREVO_API_KEY = window.BREVO_API_KEY || "YOUR_FALLBACK_KEY_HERE";
 async function sendDailyReminderEmails() {
   if (!currentUser || !notificationsEnabled) {
     console.log('🔕 Notifications disabled or no user logged in');
