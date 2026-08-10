@@ -1182,16 +1182,91 @@
     }
 
     /* ============================================================
-       PROFILE PHOTO
+       PROFILE PHOTO - FIXED: Stores in both localStorage AND Supabase
     ============================================================ */
     function updateProfileUI() {
       if(!currentUser) return;
       const email = currentUser.email || '';
       el.profileName.textContent = email.split('@')[0] || 'User';
+      
+      // Try localStorage first (faster)
       const stored = localStorage.getItem(`taskvault_profile_${currentUser.id}`);
-      if(stored) { profilePhotoUrl = stored; el.profileAvatar.innerHTML = `<img src="${stored}" alt="Profile">`; }
-      else { profilePhotoUrl = null; el.profileAvatar.innerHTML = '<i class="fa-regular fa-user"></i>'; }
+      if(stored) { 
+        profilePhotoUrl = stored; 
+        el.profileAvatar.innerHTML = `<img src="${stored}" alt="Profile">`; 
+        return;
+      }
+      
+      // If not in localStorage, try to get from Supabase user metadata
+      if(currentUser.user_metadata && currentUser.user_metadata.avatar_url) {
+        const avatarUrl = currentUser.user_metadata.avatar_url;
+        localStorage.setItem(`taskvault_profile_${currentUser.id}`, avatarUrl);
+        profilePhotoUrl = avatarUrl;
+        el.profileAvatar.innerHTML = `<img src="${avatarUrl}" alt="Profile">`;
+      } else {
+        profilePhotoUrl = null; 
+        el.profileAvatar.innerHTML = '<i class="fa-regular fa-user"></i>';
+      }
     }
+
+    // Profile upload handler with Supabase persistence
+    el.profileUploadBtn.addEventListener('click', ()=> el.profileUploadInput.click());
+
+    el.profileUploadInput.addEventListener('change', async (e)=>{
+      const file = e.target.files[0]; 
+      if(!file) return;
+      if(!file.type.startsWith('image/')) { showToast('Please select an image file.', 'error'); return; }
+      if(file.size > 2*1024*1024) { showToast('Image must be less than 2MB.', 'error'); return; }
+      
+      const reader = new FileReader();
+      reader.onload = async (ev) => {
+        const base64 = ev.target.result;
+        // Save to localStorage
+        localStorage.setItem(`taskvault_profile_${currentUser.id}`, base64);
+        profilePhotoUrl = base64;
+        el.profileAvatar.innerHTML = `<img src="${base64}" alt="Profile">`;
+        el.profileUploadPreview.innerHTML = `<img src="${base64}" style="width:100%;height:100%;object-fit:cover;">`;
+        
+        // Save to Supabase user metadata
+        try {
+          const { error } = await supabaseClient.auth.updateUser({
+            data: { avatar_url: base64 }
+          });
+          if(error) throw error;
+          // Update current user object
+          if(currentUser) {
+            currentUser.user_metadata = { ...currentUser.user_metadata, avatar_url: base64 };
+          }
+          showToast('Profile photo saved!', 'success');
+        } catch(error) {
+          console.error('Error saving to Supabase:', error);
+          showToast('Photo saved locally only.', 'info');
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+
+    el.profileRemoveBtn.addEventListener('click', async ()=>{
+      localStorage.removeItem(`taskvault_profile_${currentUser.id}`);
+      profilePhotoUrl = null;
+      el.profileAvatar.innerHTML = '<i class="fa-regular fa-user"></i>';
+      el.profileUploadPreview.innerHTML = `<div class="upload-placeholder" style="text-align:center;color:var(--text-muted);"><i class="fa-regular fa-user" style="font-size:32px;"></i><span style="display:block;font-size:12px;">No photo</span></div>`;
+      
+      // Remove from Supabase metadata
+      try {
+        const { error } = await supabaseClient.auth.updateUser({
+          data: { avatar_url: null }
+        });
+        if(error) throw error;
+        if(currentUser) {
+          currentUser.user_metadata = { ...currentUser.user_metadata, avatar_url: null };
+        }
+        showToast('Photo removed.', 'success');
+      } catch(error) {
+        console.error('Error removing from Supabase:', error);
+        showToast('Photo removed locally only.', 'info');
+      }
+    });
 
     el.profileWrapper.addEventListener('click', ()=>{
       el.profileModal.classList.remove('hidden');
@@ -1201,29 +1276,6 @@
     });
     el.closeProfileModal.addEventListener('click', ()=> el.profileModal.classList.add('hidden'));
     el.profileModal.addEventListener('click', e=>{ if(e.target === e.currentTarget) el.profileModal.classList.add('hidden'); });
-    el.profileUploadBtn.addEventListener('click', ()=> el.profileUploadInput.click());
-    el.profileUploadInput.addEventListener('change', async (e)=>{
-      const file = e.target.files[0]; if(!file) return;
-      if(!file.type.startsWith('image/')) { showToast('Please select an image file.', 'error'); return; }
-      if(file.size > 2*1024*1024) { showToast('Image must be less than 2MB.', 'error'); return; }
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const base64 = ev.target.result;
-        localStorage.setItem(`taskvault_profile_${currentUser.id}`, base64);
-        profilePhotoUrl = base64;
-        el.profileAvatar.innerHTML = `<img src="${base64}" alt="Profile">`;
-        el.profileUploadPreview.innerHTML = `<img src="${base64}" style="width:100%;height:100%;object-fit:cover;">`;
-        showToast('Profile photo updated!', 'success');
-      };
-      reader.readAsDataURL(file);
-    });
-    el.profileRemoveBtn.addEventListener('click', ()=>{
-      localStorage.removeItem(`taskvault_profile_${currentUser.id}`);
-      profilePhotoUrl = null;
-      el.profileAvatar.innerHTML = '<i class="fa-regular fa-user"></i>';
-      el.profileUploadPreview.innerHTML = `<div class="upload-placeholder" style="text-align:center;color:var(--text-muted);"><i class="fa-regular fa-user" style="font-size:32px;"></i><span style="display:block;font-size:12px;">No photo</span></div>`;
-      showToast('Photo removed.', 'success');
-    });
 
     /* ============================================================
        AUTH
@@ -1711,24 +1763,76 @@
     }
 
     /* ============================================================
-       GOALS - CRUD
+       GOALS - FIXED: Stores in both localStorage AND Supabase
     ============================================================ */
-    // Load goals from localStorage
+    // Load goals from localStorage or Supabase
     function loadGoals() {
       if(!currentUser) return;
+      
+      // Try to load from localStorage first
       const stored = localStorage.getItem(`taskvault_goals_${currentUser.id}`);
       if(stored) {
-        try { goals = JSON.parse(stored); } catch(e) { goals = []; }
-      } else {
-        goals = [];
+        try { 
+          goals = JSON.parse(stored); 
+          renderGoals();
+          // Also sync to Supabase in background
+          syncGoalsToSupabase();
+          return;
+        } catch(e) { 
+          goals = []; 
+        }
       }
-      renderGoals();
+      
+      // If not in localStorage, try to load from Supabase
+      supabaseClient.from('user_goals')
+        .select('goals_data')
+        .eq('user_id', currentUser.id)
+        .single()
+        .then(({ data, error }) => {
+          if(!error && data && data.goals_data) {
+            try {
+              goals = JSON.parse(data.goals_data);
+              localStorage.setItem(`taskvault_goals_${currentUser.id}`, data.goals_data);
+            } catch(e) { 
+              goals = []; 
+            }
+          } else {
+            goals = [];
+          }
+          renderGoals();
+        })
+        .catch(() => {
+          goals = [];
+          renderGoals();
+        });
     }
 
-    // Save goals to localStorage
+    // Save goals to localStorage and Supabase
     function saveGoals() {
       if(!currentUser) return;
-      localStorage.setItem(`taskvault_goals_${currentUser.id}`, JSON.stringify(goals));
+      const goalsData = JSON.stringify(goals);
+      localStorage.setItem(`taskvault_goals_${currentUser.id}`, goalsData);
+      
+      // Also save to Supabase for persistence across devices
+      if(currentUser) {
+        syncGoalsToSupabase();
+      }
+    }
+
+    // Sync goals to Supabase
+    async function syncGoalsToSupabase() {
+      if(!currentUser || !goals) return;
+      try {
+        const goalsData = JSON.stringify(goals);
+        const { error } = await supabaseClient.from('user_goals').upsert({
+          user_id: currentUser.id,
+          goals_data: goalsData,
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'user_id' });
+        if(error) console.error('Error saving goals to Supabase:', error);
+      } catch(err) {
+        console.error('Error syncing goals to Supabase:', err);
+      }
     }
 
     // Add goal
@@ -1767,6 +1871,7 @@
         pendingAction = null;
       };
     }
+    window.deleteGoal = deleteGoal;
 
     // Toggle goal completion
     function toggleGoal(id) {
@@ -1781,6 +1886,7 @@
         }
       }
     }
+    window.toggleGoal = toggleGoal;
 
     // Render goals
     function renderGoals() {
@@ -1874,7 +1980,10 @@
       await checkIncompleteTasks();
       streak = parseInt(localStorage.getItem('taskvault_streak') || '0');
       el.streakCount.textContent = streak;
+      
+      // Load goals - this will handle localStorage AND Supabase
       loadGoals();
+      
       // Update reminder time display
       el.reminderTimeDisplay.textContent = formatTimeForDisplay(reminderTime);
       if (showWelcome) {
@@ -1940,4 +2049,4 @@
     boot();
   </script>
 </body>
-</html>
+</html> 
